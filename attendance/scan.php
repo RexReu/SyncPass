@@ -4,70 +4,80 @@ require_once '../core/Attendance.php';
 require_once '../core/Student.php';
 require_once '../core/User.php';
 
-$token = $_GET['token'] ?? null;
-$message = '';
-$message_type = '';
-$done_name   = '';
-$done_status = '';
+// ─── Helpers ────────────────────────────────────────────────────────────────
 
-// Clean done screen — no token needed, no expiry risk
-if(isset($_GET['done'])){
+function resolveClientIp(): string {
+    return trim(explode(',', $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? '')[0]);
+}
+
+function validateSession(Attendance $model, ?string $token): ?array {
+    if (!$token) die("Invalid QR Code.");
+    $session = $model->getSessionByToken($token);
+    if (!$session) die("Invalid QR Code.");
+    $now = date('H:i:s');
+    if ($now > $session['expiry_time'] || $session['status'] != 'active') {
+        die("This QR Code has already expired. Please ask your faculty to generate a new one.");
+    }
+    return $session;
+}
+
+function resolveAttendanceStatus(array $session, string $now): string {
+    $teacher      = (new User())->getById($session['teacher_id']);
+    $late_minutes = !empty($teacher['late_threshold']) ? (int)$teacher['late_threshold'] : 10;
+    $late_threshold = date('H:i:s', strtotime($session['start_time']) + ($late_minutes * 60));
+    return ($now > $late_threshold) ? 'late' : 'present';
+}
+
+function handleConfirmPost(Attendance $model, array $session, string $now): array {
+    $student_number = str_replace('-', '', trim($_POST['student_number']));
+    $student        = (new Student())->getByNumberStripped($student_number);
+    $client_ip      = resolveClientIp();
+
+    if (!$student) {
+        return ['error', "Student not found. Please check your student number."];
+    }
+    if (!$model->isEnrolledInClass($session['class_id'], $student['student_id'])) {
+        return ['error', "You are not enrolled in this class. Please contact your faculty."];
+    }
+    if ($model->isAlreadyRecorded($session['session_id'], $student['student_id'])) {
+        return ['warning', "Attendance already recorded for " . htmlspecialchars($student['full_name']) . "!"];
+    }
+    if ($model->isIpAlreadyScanned($session['session_id'], $client_ip)) {
+        return ['error', "This device has already been used to scan attendance for this session."];
+    }
+
+    $status = resolveAttendanceStatus($session, $now);
+    if ($model->recordAttendance($session['session_id'], $student['student_id'], $now, $status, $client_ip)) {
+        header("Location: scan.php?done=1&name=" . urlencode($student['full_name']) . "&status=$status");
+        exit();
+    }
+    return ['error', "Something went wrong. Please try again."];
+}
+
+// ─── Controller ─────────────────────────────────────────────────────────────
+
+$token        = $_GET['token'] ?? null;
+$message      = '';
+$message_type = '';
+$done_name    = '';
+$done_status  = '';
+
+if (isset($_GET['done'])) {
     $done_name   = $_GET['name']   ?? '';
     $done_status = $_GET['status'] ?? '';
-    // skip all session logic below
     goto render;
 }
 
-if(!$token) die("Invalid QR Code.");
-
 $attendanceModel = new Attendance();
-$session = $attendanceModel->getSessionByToken($token);
+$session         = validateSession($attendanceModel, $token);
+$now             = date('H:i:s');
+$client_ip       = resolveClientIp();
+$ip_blocked      = $attendanceModel->isIpAlreadyScanned($session['session_id'], $client_ip);
 
-if(!$session) die("Invalid QR Code.");
-
-$now = date('H:i:s');
-if($now > $session['expiry_time'] || $session['status'] != 'active'){
-    die("This QR Code has already expired. Please ask your faculty to generate a new one.");
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && ($_POST['step'] ?? '') === 'confirm') {
+    [$message_type, $message] = handleConfirmPost($attendanceModel, $session, $now);
 }
 
-$client_ip = trim(explode(',', $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? '')[0]);
-$ip_blocked = $attendanceModel->isIpAlreadyScanned($session['session_id'], $client_ip);
-
-if($_SERVER['REQUEST_METHOD'] == 'POST' && ($_POST['step'] ?? '') === 'confirm'){
-    $student_number = str_replace('-', '', trim($_POST['student_number']));
-    $studentModel   = new Student();
-    $student        = $studentModel->getByNumberStripped($student_number);
-    $client_ip      = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? '';
-    $client_ip      = trim(explode(',', $client_ip)[0]);
-
-    if(!$student){
-        $message = "Student not found. Please check your student number.";
-        $message_type = "error";
-    } elseif(!$attendanceModel->isEnrolledInClass($session['class_id'], $student['student_id'])){
-        $message = "You are not enrolled in this class. Please contact your faculty.";
-        $message_type = "error";
-    } elseif($attendanceModel->isAlreadyRecorded($session['session_id'], $student['student_id'])){
-        $message = "Attendance already recorded for " . htmlspecialchars($student['full_name']) . "!";
-        $message_type = "warning";
-    } elseif($attendanceModel->isIpAlreadyScanned($session['session_id'], $client_ip)){
-        $message = "This device has already been used to scan attendance for this session.";
-        $message_type = "error";
-    } else {
-        $u = (new User())->getById($session['teacher_id']);
-        $late_minutes   = !empty($u['late_threshold']) ? (int)$u['late_threshold'] : 10;
-        $late_threshold = date('H:i:s', strtotime($session['start_time']) + ($late_minutes * 60));
-        $status = ($now > $late_threshold) ? 'late' : 'present';
-
-        if($attendanceModel->recordAttendance($session['session_id'], $student['student_id'], $now, $status, $client_ip)){
-            $name = urlencode($student['full_name']);
-            header("Location: scan.php?done=1&name=$name&status=$status");
-            exit();
-        } else {
-            $message = "Something went wrong. Please try again.";
-            $message_type = "error";
-        }
-    }
-}
 render:
 ?>
 <!DOCTYPE html>
