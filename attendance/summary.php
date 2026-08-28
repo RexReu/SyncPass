@@ -225,7 +225,7 @@ if($session_id){
                                     <option value="excused" <?php echo $row['status'] == 'excused' ? 'selected' : ''; ?>>Excused</option>
                                     <option value="absent"  <?php echo $row['status'] == 'absent'  ? 'selected' : ''; ?>>Absent (Remove)</option>
                                 </select>
-                                <button class="action-btn save" onclick="saveStatus(<?php echo $row['record_id']; ?>, <?php echo $session_id; ?>)">SAVE</button>
+                                <button class="action-btn save" onclick="saveStatus(<?php echo $row['record_id']; ?>, <?php echo $session_id; ?>, <?php echo $row['student_id']; ?>)">SAVE</button>
                                 <span class="save-msg" id="msg-<?php echo $row['record_id']; ?>"></span>
                             </td>
                             <?php endif; ?>
@@ -250,7 +250,7 @@ if($session_id){
                             <td><span class="attendance-status absent">Absent</span></td>
                             <?php if($role == 'teacher' || $role == 'admin'): ?>
                             <td>
-                                <button class="attendance-status mark" onclick="openExcuseModal(<?php echo $abs['student_id']; ?>, <?php echo $session_id; ?>, '<?php echo addslashes($abs['full_name']); ?>')">Mark Excused</button>
+                                <button class="attendance-status mark" onclick="openExcuseModal(<?php echo $abs['student_id']; ?>, <?php echo (int)$session['session_id']; ?>, '<?php echo addslashes($abs['full_name']); ?>')">Mark Excused</button>
                                 <span class="save-msg" id="abs-msg-<?php echo $abs['student_id']; ?>"></span>
                             </td>
                             <?php endif; ?>
@@ -293,14 +293,14 @@ if($session_id){
     </div>
 </div>
 <script>
-    function saveStatus(recordId, sessionId){
+    function saveStatus(recordId, sessionId, studentId){
         const status = document.getElementById('sel-' + recordId).value;
         const msg    = document.getElementById('msg-' + recordId);
         const badge  = document.getElementById('badge-' + recordId);
         fetch('update_record.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: `record_id=${recordId}&status=${status}&session_id=${sessionId}`
+            body: `record_id=${recordId}&status=${status}&session_id=${sessionId}&student_id=${studentId}`
         })
         .then(r => r.json())
         .then(data => {
@@ -362,19 +362,21 @@ if($session_id){
 
     function confirmExcuse(){
         if(!_excuseStudentId) return;
+        const studentId = _excuseStudentId;
+        const sessionId = _excuseSessionId;
         closeExcuseModal();
         fetch('update_record.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: `student_id=${_excuseStudentId}&status=excused&session_id=${_excuseSessionId}`
+            body: `student_id=${studentId}&status=excused&session_id=${sessionId}`
         })
-        .then(r => r.json())
-        .then(data => {
-            if(data.success){
-                const row = document.getElementById('absent-row-' + _excuseStudentId);
-                row.style.background = '#f3e8ff';
-                row.cells[3].innerHTML = '<span style="color:#6f42c1; font-size:13px;">✓ Marked Excused</span>';
-            }
+        .then(r => r.text())
+        .then(raw => {
+            try {
+                const data = JSON.parse(raw);
+                if(data.success){ location.reload(); }
+                else { alert('Failed: ' + JSON.stringify(data)); }
+            } catch(e) { alert('Parse error: ' + raw); }
         });
     }
 </script>

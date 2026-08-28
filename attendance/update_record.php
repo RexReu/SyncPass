@@ -16,17 +16,15 @@ if(!in_array($status, ['present', 'late', 'absent', 'excused']) || !$session_id)
 
 $attendanceModel = new Attendance();
 
-if($status === 'excused' && $student_id){
-    // Insert new excused record for an absent student
-    $ok = $attendanceModel->insertExcused($session_id, $student_id);
-} elseif($status === 'absent' && $record_id){
-    // Delete the record — revert to absent
+if($status === 'absent' && $record_id){
     $conn = Database::getConn();
     $stmt = $conn->prepare("DELETE FROM attendance_records WHERE record_id = ?");
     $stmt->bind_param("i", $record_id);
     $ok = $stmt->execute();
 } elseif($record_id){
     $ok = $attendanceModel->updateRecordStatus($record_id, $status);
+} elseif($status === 'excused' && $student_id){
+    $ok = $attendanceModel->insertExcused($session_id, $student_id);
 } else {
     $ok = false;
 }
